@@ -64,39 +64,42 @@ use chrono::{offset, DateTime, Duration, Utc};
 pub use cron::Schedule;
 pub use uuid::Uuid;
 
+use futures::*;
+use std::pin::Pin;
+use std::*;
+
 /// A schedulable `Job`.
-pub struct Job<'a> {
-    schedule: Schedule,
-    run: Box<(FnMut() -> ()) + 'a>,
+pub struct Job {
+    schedule: Schedule, // FnMut() -> std::future::Future<Output = ()>
+    run: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
     last_tick: Option<DateTime<Utc>>,
     limit_missed_runs: usize,
     job_id: Uuid,
 }
 
-impl<'a> Job<'a> {
+impl Job {
     /// Create a new job.
     ///
     /// ```rust,ignore
     /// // Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour
     /// // of any day in March and June that is a Friday of the year 2017.
     /// let s: Schedule = "0 15 6,8,10 * Mar,Jun Fri 2017".into().unwrap();
-    /// Job::new(s, || println!("I have a complex schedule...") );
+    /// Job::new(s, async || println!("I have a complex schedule...") );
     /// ```
-    pub fn new<T>(schedule: Schedule, run: T) -> Job<'a>
-    where
-        T: 'a,
-        T: FnMut() -> (),
-    {
+    pub fn new(
+        schedule: Schedule,
+        run_fn: Box<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>,
+    ) -> Job {
         Job {
             schedule,
-            run: Box::new(run),
+            run: run_fn,
             last_tick: None,
             limit_missed_runs: 1,
             job_id: Uuid::new_v4(),
         }
     }
 
-    fn tick(&mut self) {
+    async fn tick(&mut self) {
         let now = Utc::now();
         if self.last_tick.is_none() {
             self.last_tick = Some(now);
@@ -111,14 +114,14 @@ impl<'a> Job<'a> {
                 if event > now {
                     break;
                 }
-                (self.run)();
+                (self.run)().await;
             }
         } else {
             for event in self.schedule.after(&self.last_tick.unwrap()) {
                 if event > now {
                     break;
                 }
-                (self.run)();
+                (self.run)().await;
             }
         }
 
@@ -152,13 +155,13 @@ impl<'a> Job<'a> {
 
 #[derive(Default)]
 /// The JobScheduler contains and executes the scheduled jobs.
-pub struct JobScheduler<'a> {
-    jobs: Vec<Job<'a>>,
+pub struct JobScheduler {
+    jobs: Vec<Job>,
 }
 
-impl<'a> JobScheduler<'a> {
+impl JobScheduler {
     /// Create a new `JobScheduler`.
-    pub fn new() -> JobScheduler<'a> {
+    pub fn new() -> JobScheduler {
         JobScheduler { jobs: Vec::new() }
     }
 
@@ -166,11 +169,11 @@ impl<'a> JobScheduler<'a> {
     ///
     /// ```rust,ignore
     /// let mut sched = JobScheduler::new();
-    /// sched.add(Job::new("1/10 * * * * *".parse().unwrap(), || {
+    /// sched.add(Job::new("1/10 * * * * *".parse().unwrap(), async || {
     ///     println!("I get executed every 10 seconds!");
     /// }));
     /// ```
-    pub fn add(&mut self, job: Job<'a>) -> Uuid {
+    pub fn add(&mut self, job: Job) -> Uuid {
         let job_id = job.job_id;
         self.jobs.push(job);
 
@@ -208,13 +211,13 @@ impl<'a> JobScheduler<'a> {
     ///
     /// ```rust,ignore
     /// loop {
-    ///     sched.tick();
+    ///     sched.tick().await;
     ///     std::thread::sleep(Duration::from_millis(500));
     /// }
     /// ```
-    pub fn tick(&mut self) {
+    pub async fn tick(&mut self) {
         for mut job in &mut self.jobs {
-            job.tick();
+            job.tick().await;
         }
     }
 
@@ -224,7 +227,7 @@ impl<'a> JobScheduler<'a> {
     ///
     /// ```rust, ignore
     /// loop {
-    ///     sched.tick();
+    ///     sched.tick().await;
     ///     std::thread::sleep(sched.time_till_next_job());
     /// }
     /// ```
