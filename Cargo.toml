@@ -19,5 +19,5 @@ categories = ["date-and-time"]
 cron = "~0.6"
 chrono = "~0.4"
 uuid = { version = "0.8.1", features = ["v4"] }
-tokio = {version = "0.3.3", features = ["macros","rt-multi-thread"]}
+tokio = {version = "0.2.0", features = ["macros"]}
 futures = "0.3.5"
